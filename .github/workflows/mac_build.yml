@@ -1,0 +1,42 @@
+name: Build macOS Lc0
+
+# Trigger the build when pushing to the specific branch or manually
+on:
+  push:
+    branches: [ "release/0.32" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    # 1. Checkout the code including submodules (often needed for C++ deps)
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # 2. Setup Python (Pre-installed on macos-latest, but this ensures version)
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # 3. Install Meson and Ninja as per instructions
+    - name: Install Dependencies
+      run: |
+        pip3 install meson ninja
+
+    # 4. Run the build script
+    - name: Build Lc0
+      run: |
+        chmod +x build.sh
+        ./build.sh -Dgtest=false
+
+    # 5. Upload the compiled binary so you can download it
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: lc0-mac-build
+        path: build/release/lc0
