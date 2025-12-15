@@ -1,42 +1,85 @@
-name: Build macOS Lc0
+name: Build macOS Universal
 
-# Trigger the build when pushing to the specific branch or manually
 on:
   push:
     branches: [ "release/0.32" ]
+    # Trigger on tags starting with 'v' for releases
+    tags: [ "v*" ]
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-latest
+  build-mac-universal:
+    name: Build Universal Binary (x86 + ARM)
+    runs-on: macos-14  # Apple Silicon runner (M1/M2)
 
     steps:
-    # 1. Checkout the code including submodules (often needed for C++ deps)
+    # 1. Checkout Code
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    # 2. Setup Python (Pre-installed on macos-latest, but this ensures version)
+    # 2. Setup Python
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    # 3. Install Meson and Ninja as per instructions
-    - name: Install Dependencies
+    # 3. Install Build Tools & ISPC (From CircleCI "Install build tools")
+    - name: Install Dependencies & ISPC
       run: |
-        pip3 install meson ninja
+        pip3 install meson==1.3.0 ninja
+        
+        # Download and install ISPC
+        curl -LJOs https://github.com/ispc/ispc/releases/download/v1.21.0/ispc-v1.21.0-macOS.universal.tar.gz
+        tar xf ispc-v1.21.0-macOS.universal.tar.gz
+        sudo cp ispc-v1.21.0-macOS.universal/bin/ispc /usr/local/bin/
 
-    # 4. Run the build script
-    - name: Build Lc0
+    # 4. Build x86_64 (Using cross-file as per your config)
+    - name: Configure & Build x86
       run: |
-        chmod +x build.sh
-        ./build.sh -Dgtest=false
+        meson setup build-x86 --buildtype=release -Dgtest=false -Dopencl=false --cross-file cross-files/x86_64-darwin
+        ninja -C build-x86
 
-    # 5. Upload the compiled binary so you can download it
+    # 5. Build ARM64 (Native on macos-14 runner)
+    - name: Configure & Build ARM
+      run: |
+        meson setup build-arm --buildtype=release -Dgtest=false -Dopencl=false
+        ninja -C build-arm
+
+    # 6. Create Universal Binary (lipo)
+    - name: Make Universal Binary
+      run: |
+        # Combine the two executables
+        lipo -create -o lc0 build-x86/lc0 build-arm/lc0
+        chmod +x lc0
+        
+        # Verify architecture
+        file lc0
+
+    # 7. Upload Artifact (Replaces persist_to_workspace)
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: lc0-mac-build
-        path: build/release/lc0
+        name: lc0-mac-universal
+        path: lc0
+
+  # 8. Release Job (Only runs on tags)
+  upload-release:
+    name: Upload to GitHub Release
+    needs: build-mac-universal
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Download Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: lc0-mac-universal
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: lc0
